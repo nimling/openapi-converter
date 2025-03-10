@@ -11,11 +11,12 @@ import (
 func (n *OpenAPIConverter) ResolveExternalRefs() error {
 	// Initialize component register if not already done
 	if n.doc.Components == nil {
-		n.doc.Components = &Components{}
-	}
-
-	if n.doc.Components.Register == nil {
-		n.doc.Components.Register = make(ReferenceRegister)
+		n.doc.Components = &Components{
+			SecuritySchemes: map[string]*SecurityScheme{},
+			Parameters:      map[string]*Parameter{},
+			Schemas:         map[string]*Schema{},
+			Register:        ReferenceRegister{},
+		}
 	}
 
 	// Iteratively resolve references until no external refs remain
@@ -76,7 +77,7 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 
 			// Process parameter schema
 			if param.Schema != nil {
-				if err := param.Schema.resolveExternalRefs(&n.doc.Components.Register, n.filePath); err != nil {
+				if err := param.Schema.resolveExternalRefs(n.doc.Components, n.filePath); err != nil {
 					return fmt.Errorf("failed to resolve parameter schema: %w", err)
 				}
 			}
@@ -120,7 +121,7 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 
 				// Process parameter schema
 				if param.Schema != nil {
-					if err := param.Schema.resolveExternalRefs(&n.doc.Components.Register, internalRelPath); err != nil {
+					if err := param.Schema.resolveExternalRefs(n.doc.Components, internalRelPath); err != nil {
 						return fmt.Errorf("failed to resolve parameter schema: %w", err)
 					}
 				}
@@ -146,7 +147,7 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 						continue
 					}
 
-					if err := content.Schema.resolveExternalRefs(&n.doc.Components.Register, requestRelPath); err != nil {
+					if err := content.Schema.resolveExternalRefs(n.doc.Components, requestRelPath); err != nil {
 						return fmt.Errorf("failed to resolve request body schema for %s: %w", mediaType, err)
 					}
 				}
@@ -178,7 +179,7 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 							continue
 						}
 
-						if err := content.Schema.resolveExternalRefs(&n.doc.Components.Register, responseRelPath); err != nil {
+						if err := content.Schema.resolveExternalRefs(n.doc.Components, responseRelPath); err != nil {
 							return fmt.Errorf("failed to resolve response schema for %s: %w", mediaType, err)
 						}
 					}
@@ -192,51 +193,68 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 
 	return nil
 }
-
-func (r *Schema) resolveExternalRefs(register *ReferenceRegister, relPath string) error {
-	// First handle the current schema's ref
+func (r *Schema) resolveExternalRefs(components *Components, relPath string) error {
+	// Handle direct reference
 	if r.Ref != nil && isExternalRef(*r.Ref) {
-		filePath := resolveRefPath(relPath, *r.Ref)
-		if existingRef, ok := (*register)[filePath]; ok {
+		refFilePath := resolveRefPath(relPath, *r.Ref)
+
+		// Check if we've already processed this reference
+		if existingRef, ok := components.Register[refFilePath]; ok {
+			// Just update to internal reference
 			r.Ref = &existingRef
-		} else {
-			resolved, err := loadExternalRef[Schema](filePath)
-			if err != nil {
-				return fmt.Errorf("failed to load external ref: %w", err)
+			return nil
+		}
+
+		resolved, err := loadExternalRef[Schema](refFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to load external ref: %w", err)
+		}
+
+		comp := components.PutRegister("schemas", refFilePath)
+		r.Ref = &comp.Identifier
+
+		if err := resolved.resolveExternalRefs(components, refFilePath); err != nil {
+			return err
+		}
+
+		// Define the component if it does not exist
+		if components.Schemas[comp.Name] == nil {
+			components.Schemas[comp.Name] = resolved
+		}
+
+		return nil
+	}
+
+	// Handle allOf array - keeping the original context for each item
+	if r.AllOf != nil {
+		for i, schema := range r.AllOf {
+			if schema == nil {
+				continue
 			}
 
-			// Set internal reference and copy properties
-			(*register).SetComponent("schemas", filePath)
-
-			// Keep the reference but also copy properties for validation
-			oldRef := r.Ref
-			*r = *resolved
-			r.Ref = oldRef
-
-			// Continue resolving the newly loaded schema's references
-			if err := resolved.resolveExternalRefs(register, filePath); err != nil {
-				return err
+			// Process each allOf schema with the current context path
+			if err := schema.resolveExternalRefs(components, relPath); err != nil {
+				return fmt.Errorf("failed to resolve allOf[%d]: %w", i, err)
 			}
 		}
 	}
 
-	// Process properties map recursively
+	// Process properties - use the same context path
 	if r.Properties != nil {
 		for propName, prop := range r.Properties {
 			if prop == nil {
 				continue
 			}
 
-			// Recursively resolve refs in the property
-			if err := prop.resolveExternalRefs(register, relPath); err != nil {
+			if err := prop.resolveExternalRefs(components, relPath); err != nil {
 				return fmt.Errorf("failed to resolve property '%s': %w", propName, err)
 			}
 		}
 	}
 
-	// Process items for array types
+	// Process items - use the same context path
 	if r.Items != nil {
-		if err := r.Items.resolveExternalRefs(register, relPath); err != nil {
+		if err := r.Items.resolveExternalRefs(components, relPath); err != nil {
 			return fmt.Errorf("failed to resolve array items: %w", err)
 		}
 	}
@@ -258,7 +276,7 @@ func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {
 					return fmt.Errorf("failed to load external ref: %s, error: %w", err)
 				}
 
-				components.Register.SetComponent("securitySchemes", filePath)
+				components.PutRegister("securitySchemes", filePath)
 				components.SecuritySchemes[key] = res
 			}
 		}
@@ -273,7 +291,7 @@ func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {
 					return fmt.Errorf("failed to load external ref: %s, error: %w", err)
 				}
 
-				components.Register.SetComponent("parameters", filePath)
+				components.PutRegister("parameters", filePath)
 				components.Parameters[key] = res
 			}
 		}
@@ -289,16 +307,16 @@ func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {
 					return fmt.Errorf("failed to load external ref: %s, error: %w", err)
 				}
 
-				components.Register.SetComponent("schemas", relPath)
+				components.PutRegister("schemas", relPath)
 				comp = res
 			} else {
-				def := components.Register.GetComponent("schemas", key)
+				def := components.PutRegister("schemas", key)
 				if def != nil {
 					relPath = def.FilePath
 				}
 			}
 
-			if err := comp.resolveExternalRefs(&n.doc.Components.Register, relPath); err != nil {
+			if err := comp.resolveExternalRefs(n.doc.Components, relPath); err != nil {
 				return fmt.Errorf("failed to resolve external refs: %w", err)
 			}
 
@@ -435,6 +453,15 @@ func hasExternalRefsInSchema(schema *Schema) bool {
 	// Check items
 	if schema.Items != nil && hasExternalRefsInSchema(schema.Items) {
 		return true
+	}
+
+	// Check allOf, oneOf, anyOf schemas
+	if schema.AllOf != nil {
+		for _, s := range schema.AllOf {
+			if hasExternalRefsInSchema(s) {
+				return true
+			}
+		}
 	}
 
 	return false

@@ -99,6 +99,10 @@ type Schema struct {
 	Example     interface{}        `yaml:"example,omitempty"`
 	Nullable    *bool              `yaml:"nullable,omitempty"`
 	Items       *Schema            `yaml:"items,omitempty"`
+
+	AllOf []*Schema `yaml:"allOf,omitempty"`
+	OneOf []*Schema `yaml:"oneOf,omitempty"`
+	AnyOf []*Schema `yaml:"anyOf,omitempty"`
 }
 
 type Operation struct {

@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -49,13 +50,31 @@ func (p *PathItem) SetMethodOperation(method OperationMethod, operation *Operati
 	}
 }
 
-func (r ReferenceRegister) SetComponent(compType string, filePath string) {
+func (c *Components) PutRegister(compType string, filePath string) *Component {
 	name := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
-	r[filePath] = "#/components/" + compType + "/" + name
+	identifier := "#/components/" + compType + "/" + name
+	if c.Register == nil {
+		c.Register = ReferenceRegister{
+			filePath: identifier,
+		}
+	} else {
+		c.Register[filePath] = identifier
+	}
+
+	if strings.Contains(identifier, "BookableAvailability") {
+		fmt.Println("Got here okey??")
+	}
+
+	return &Component{
+		FilePath:   filePath,
+		Name:       name,
+		Identifier: identifier,
+		Type:       compType,
+	}
 }
 
-func (r ReferenceRegister) GetComponent(compType string, compName string) *Component {
-	for k, v := range r {
+func (c *Components) GetRegister(compType string, compName string) *Component {
+	for k, v := range c.Register {
 		if strings.TrimPrefix(v, "#/components/"+compType+"/") == compName {
 			return &Component{
 				FilePath:   k,
