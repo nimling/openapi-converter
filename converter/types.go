@@ -45,6 +45,13 @@ type Server struct {
 	Description string `yaml:"description"`
 }
 
+type Component struct {
+	FilePath   string
+	Name       string
+	Identifier string
+	Type       string
+}
+
 type Components struct {
 	SecuritySchemes map[string]*SecurityScheme `yaml:"securitySchemes,omitempty"`
 	Parameters      map[string]*Parameter      `yaml:"parameters,omitempty"`

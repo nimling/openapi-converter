@@ -9,17 +9,44 @@ import (
 )
 
 func (n *OpenAPIConverter) ResolveExternalRefs() error {
-	if n.doc.Components != nil {
+	// Initialize component register if not already done
+	if n.doc.Components == nil {
+		n.doc.Components = &Components{}
+	}
+
+	if n.doc.Components.Register == nil {
+		n.doc.Components.Register = make(ReferenceRegister)
+	}
+
+	// Iteratively resolve references until no external refs remain
+	maxIterations := 10 // Prevent infinite loops
+	for i := 0; i < maxIterations; i++ {
+		externalRefsRemain := false
+
+		// First resolve components
 		if err := n.resolveComponentRefs(n.doc.Components); err != nil {
 			return fmt.Errorf("failed to resolve component references: %w", err)
 		}
-	}
 
-	if n.doc.Paths != nil {
-		for key, pathItem := range n.doc.Paths {
-			if err := n.resolvePathItemRefs(pathItem); err != nil {
-				return fmt.Errorf("failed to resolve refs in path %s: %w", key, err)
+		// Then resolve path items
+		if n.doc.Paths != nil {
+			for key, pathItem := range n.doc.Paths {
+				if err := n.resolvePathItemRefs(pathItem); err != nil {
+					return fmt.Errorf("failed to resolve refs in path %s: %w", key, err)
+				}
 			}
+		}
+
+		// Check if any external references remain
+		externalRefsRemain = n.hasExternalRefs()
+
+		if !externalRefsRemain {
+			// No more external refs, we're done
+			break
+		}
+
+		if i == maxIterations-1 {
+			return fmt.Errorf("failed to resolve all external references after %d iterations", maxIterations)
 		}
 	}
 
@@ -27,101 +54,139 @@ func (n *OpenAPIConverter) ResolveExternalRefs() error {
 }
 
 func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
+	if pathItem == nil {
+		return nil
+	}
+
+	// Process path parameters if any
+	if pathItem.Parameters != nil {
+		for i, param := range pathItem.Parameters {
+			if param == nil {
+				continue
+			}
+
+			if param.Ref != nil && isExternalRef(*param.Ref) {
+				filePath := resolveRefPath(n.filePath, *param.Ref)
+				resolved, err := loadExternalRef[Parameter](filePath)
+				if err != nil {
+					return fmt.Errorf("failed to load external parameter ref: %w", err)
+				}
+				pathItem.Parameters[i] = resolved
+			}
+
+			// Process parameter schema
+			if param.Schema != nil {
+				if err := param.Schema.resolveExternalRefs(&n.doc.Components.Register, n.filePath); err != nil {
+					return fmt.Errorf("failed to resolve parameter schema: %w", err)
+				}
+			}
+		}
+	}
+
 	for method, op := range pathItem.Operations() {
 		if op == nil {
 			continue
 		}
 
+		// Handle operation reference
 		relPath := n.filePath
-
 		if op.Ref != nil && isExternalRef(*op.Ref) {
 			filePath := resolveRefPath(n.filePath, *op.Ref)
 			resolved, err := loadExternalRef[Operation](filePath)
 			if err != nil {
-				return fmt.Errorf("failed to load external ref: %w", err)
+				return fmt.Errorf("failed to load external operation ref: %w", err)
 			}
 			op = resolved
 			relPath = filePath
 		}
 
-		if op.Parameters != nil && len(op.Parameters) > 0 {
+		// Process operation parameters
+		if op.Parameters != nil {
 			for i, param := range op.Parameters {
+				if param == nil {
+					continue
+				}
+
 				internalRelPath := relPath
 				if param.Ref != nil && isExternalRef(*param.Ref) {
 					internalRelPath = resolveRefPath(relPath, *param.Ref)
 					resolved, err := loadExternalRef[Parameter](internalRelPath)
 					if err != nil {
-						return fmt.Errorf("failed to load external ref: %w", err)
+						return fmt.Errorf("failed to load external parameter ref: %w", err)
 					}
 					op.Parameters[i] = resolved
+					param = resolved
 				}
 
+				// Process parameter schema
 				if param.Schema != nil {
 					if err := param.Schema.resolveExternalRefs(&n.doc.Components.Register, internalRelPath); err != nil {
-						return fmt.Errorf("failed to load external ref: %w", err)
+						return fmt.Errorf("failed to resolve parameter schema: %w", err)
 					}
 				}
 			}
 		}
 
+		// Process request body
 		if op.RequestBody != nil {
+			requestRelPath := relPath
 			if op.RequestBody.Ref != nil && isExternalRef(*op.RequestBody.Ref) {
-				filePath := resolveRefPath(relPath, *op.RequestBody.Ref)
-				resolved, err := loadExternalRef[RequestBody](filePath)
+				requestRelPath = resolveRefPath(relPath, *op.RequestBody.Ref)
+				resolved, err := loadExternalRef[RequestBody](requestRelPath)
 				if err != nil {
-					return fmt.Errorf("failed to load external ref: %w", err)
+					return fmt.Errorf("failed to load external request body ref: %w", err)
 				}
 				op.RequestBody = resolved
 			}
 
+			// Process request body content schemas
 			if op.RequestBody.Content != nil {
-				for _, content := range op.RequestBody.Content {
-					if err := content.Schema.resolveExternalRefs(&n.doc.Components.Register, relPath); err != nil {
-						return fmt.Errorf("failed to load external ref: %w", err)
+				for mediaType, content := range op.RequestBody.Content {
+					if content == nil || content.Schema == nil {
+						continue
+					}
+
+					if err := content.Schema.resolveExternalRefs(&n.doc.Components.Register, requestRelPath); err != nil {
+						return fmt.Errorf("failed to resolve request body schema for %s: %w", mediaType, err)
 					}
 				}
 			}
 		}
 
+		// Process responses and their schemas
 		if op.Responses != nil {
 			for code, response := range op.Responses {
-				if response.Ref != nil && isExternalRef(*response.Ref) {
-					filePath := resolveRefPath(relPath, *response.Ref)
-					resolved, err := loadExternalRef[Response](filePath)
-					if err != nil {
-						return fmt.Errorf("failed to load external ref: %w", err)
-					}
-					op.Responses[code] = resolved
-				}
-
-				if response.Content == nil {
+				if response == nil {
 					continue
 				}
 
-				for contentType, content := range response.Content {
-					if content != nil && content.Schema != nil {
-						if content.Schema.Ref != nil && isExternalRef(*content.Schema.Ref) {
-							filePath := resolveRefPath(relPath, *content.Schema.Ref)
-							if existingRef, ok := n.doc.Components.Register[filePath]; ok {
-								content.Schema.Ref = &existingRef
-							} else {
-								resolved, err := loadExternalRef[ResponseContent](filePath)
-								if err != nil {
-									return fmt.Errorf("failed to load external ref: %w", err)
-								}
-								content = resolved
-								response.Content[contentType] = content
-							}
+				responseRelPath := relPath
+				if response.Ref != nil && isExternalRef(*response.Ref) {
+					responseRelPath = resolveRefPath(relPath, *response.Ref)
+					resolved, err := loadExternalRef[Response](responseRelPath)
+					if err != nil {
+						return fmt.Errorf("failed to load external response ref: %w", err)
+					}
+					op.Responses[code] = resolved
+					response = resolved
+				}
+
+				// Process response content schemas
+				if response.Content != nil {
+					for mediaType, content := range response.Content {
+						if content == nil || content.Schema == nil {
+							continue
 						}
 
-						if err := content.Schema.resolveExternalRefs(&n.doc.Components.Register, relPath); err != nil {
-							return fmt.Errorf("failed to load external ref: %w", err)
+						if err := content.Schema.resolveExternalRefs(&n.doc.Components.Register, responseRelPath); err != nil {
+							return fmt.Errorf("failed to resolve response schema for %s: %w", mediaType, err)
 						}
 					}
 				}
 			}
 		}
 
+		// Update the operation in path item
 		pathItem.SetMethodOperation(method, op)
 	}
 
@@ -129,61 +194,50 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 }
 
 func (r *Schema) resolveExternalRefs(register *ReferenceRegister, relPath string) error {
-	for _, property := range r.Properties {
-		if property.Ref == nil || !isExternalRef(*property.Ref) {
-			continue
-		}
-
-		filePath := resolveRefPath(relPath, *property.Ref)
+	// First handle the current schema's ref
+	if r.Ref != nil && isExternalRef(*r.Ref) {
+		filePath := resolveRefPath(relPath, *r.Ref)
 		if existingRef, ok := (*register)[filePath]; ok {
-			property.Ref = &existingRef
+			r.Ref = &existingRef
 		} else {
 			resolved, err := loadExternalRef[Schema](filePath)
 			if err != nil {
 				return fmt.Errorf("failed to load external ref: %w", err)
 			}
-			property = resolved
-			register.SetComponent("schemas", filePath)
-		}
 
-		if property.Properties != nil && len(property.Properties) > 0 {
-			if err := property.resolveExternalRefs(register, relPath); err != nil {
-				return fmt.Errorf("failed to resolve external refs: %w", err)
+			// Set internal reference and copy properties
+			(*register).SetComponent("schemas", filePath)
+
+			// Keep the reference but also copy properties for validation
+			oldRef := r.Ref
+			*r = *resolved
+			r.Ref = oldRef
+
+			// Continue resolving the newly loaded schema's references
+			if err := resolved.resolveExternalRefs(register, filePath); err != nil {
+				return err
 			}
 		}
+	}
 
-		if property.Items != nil {
-			if err := property.Items.resolveExternalRefs(register, relPath); err != nil {
-				return fmt.Errorf("failed to resolve external refs: %w", err)
+	// Process properties map recursively
+	if r.Properties != nil {
+		for propName, prop := range r.Properties {
+			if prop == nil {
+				continue
+			}
+
+			// Recursively resolve refs in the property
+			if err := prop.resolveExternalRefs(register, relPath); err != nil {
+				return fmt.Errorf("failed to resolve property '%s': %w", propName, err)
 			}
 		}
 	}
 
-	if r.Items == nil || r.Items.Ref == nil || !isExternalRef(*r.Items.Ref) {
-		return nil
-	}
-
-	filePath := resolveRefPath(relPath, *r.Items.Ref)
-	if existingRef, ok := (*register)[filePath]; ok {
-		r.Items.Ref = &existingRef
-	} else {
-		resolved, err := loadExternalRef[Schema](filePath)
-		if err != nil {
-			return fmt.Errorf("failed to load external ref: %w", err)
-		}
-		r.Items = resolved
-		register.SetComponent("schemas", filePath)
-	}
-
-	if r.Items.Properties != nil && len(r.Items.Properties) > 0 {
+	// Process items for array types
+	if r.Items != nil {
 		if err := r.Items.resolveExternalRefs(register, relPath); err != nil {
-			return fmt.Errorf("failed to resolve external refs: %w", err)
-		}
-	}
-
-	if r.Items.Items != nil {
-		if err := r.Items.resolveExternalRefs(register, relPath); err != nil {
-			return fmt.Errorf("failed to resolve external refs: %w", err)
+			return fmt.Errorf("failed to resolve array items: %w", err)
 		}
 	}
 
@@ -195,7 +249,6 @@ func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {
 		return nil
 	}
 
-	components.Register = make(map[string]string)
 	if components.SecuritySchemes != nil {
 		for key, comp := range components.SecuritySchemes {
 			if comp.Ref != nil && isExternalRef(*comp.Ref) {
@@ -238,6 +291,11 @@ func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {
 
 				components.Register.SetComponent("schemas", relPath)
 				comp = res
+			} else {
+				def := components.Register.GetComponent("schemas", key)
+				if def != nil {
+					relPath = def.FilePath
+				}
 			}
 
 			if err := comp.resolveExternalRefs(&n.doc.Components.Register, relPath); err != nil {
@@ -253,12 +311,15 @@ func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {
 
 func resolveRefPath(specPath, refPath string) string {
 	filePath, _ := splitRefPath(refPath)
-	if strings.HasPrefix(filePath, "./") || strings.HasPrefix(filePath, "../") {
-		baseDir := filepath.Dir(specPath)
-		filePath = filepath.Join(baseDir, filePath)
+
+	if !strings.HasPrefix(filePath, "./") && !strings.HasPrefix(filePath, "../") {
+		return filePath
 	}
 
-	return filePath
+	baseDir := filepath.Dir(specPath)
+	absPath := filepath.Join(baseDir, filePath)
+
+	return filepath.Clean(absPath)
 }
 
 func loadExternalRef[T any](filePath string) (*T, error) {
@@ -290,4 +351,165 @@ func isExternalRef(refPath string) bool {
 		strings.HasPrefix(refPath, "../") ||
 		strings.HasPrefix(refPath, "/") ||
 		strings.Contains(refPath, "://")
+}
+
+// Add helper method to check for remaining external refs
+func (n *OpenAPIConverter) hasExternalRefs() bool {
+	// Check components for external refs
+	if n.doc.Components != nil {
+		if hasExternalRefsInComponents(n.doc.Components) {
+			return true
+		}
+	}
+
+	// Check paths for external refs
+	if n.doc.Paths != nil {
+		for _, pathItem := range n.doc.Paths {
+			if hasExternalRefsInPathItem(pathItem) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// Helper functions to check for external refs
+func hasExternalRefsInComponents(components *Components) bool {
+	if components == nil {
+		return false
+	}
+
+	// Check schemas
+	if components.Schemas != nil {
+		for _, schema := range components.Schemas {
+			if hasExternalRefsInSchema(schema) {
+				return true
+			}
+		}
+	}
+
+	// Check parameters
+	if components.Parameters != nil {
+		for _, param := range components.Parameters {
+			if param.Ref != nil && isExternalRef(*param.Ref) {
+				return true
+			}
+			if param.Schema != nil && hasExternalRefsInSchema(param.Schema) {
+				return true
+			}
+		}
+	}
+
+	// Check security schemes
+	if components.SecuritySchemes != nil {
+		for _, scheme := range components.SecuritySchemes {
+			if scheme.Ref != nil && isExternalRef(*scheme.Ref) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func hasExternalRefsInSchema(schema *Schema) bool {
+	if schema == nil {
+		return false
+	}
+
+	// Check direct ref
+	if schema.Ref != nil && isExternalRef(*schema.Ref) {
+		return true
+	}
+
+	// Check properties
+	if schema.Properties != nil {
+		for _, prop := range schema.Properties {
+			if hasExternalRefsInSchema(prop) {
+				return true
+			}
+		}
+	}
+
+	// Check items
+	if schema.Items != nil && hasExternalRefsInSchema(schema.Items) {
+		return true
+	}
+
+	return false
+}
+
+func hasExternalRefsInPathItem(pathItem *PathItem) bool {
+	if pathItem == nil {
+		return false
+	}
+
+	// Check parameters
+	if pathItem.Parameters != nil {
+		for _, param := range pathItem.Parameters {
+			if param.Ref != nil && isExternalRef(*param.Ref) {
+				return true
+			}
+			if param.Schema != nil && hasExternalRefsInSchema(param.Schema) {
+				return true
+			}
+		}
+	}
+
+	// Check operations
+	for _, operation := range pathItem.Operations() {
+		if operation == nil {
+			continue
+		}
+
+		// Check operation ref
+		if operation.Ref != nil && isExternalRef(*operation.Ref) {
+			return true
+		}
+
+		// Check parameters
+		if operation.Parameters != nil {
+			for _, param := range operation.Parameters {
+				if param.Ref != nil && isExternalRef(*param.Ref) {
+					return true
+				}
+				if param.Schema != nil && hasExternalRefsInSchema(param.Schema) {
+					return true
+				}
+			}
+		}
+
+		// Check request body
+		if operation.RequestBody != nil {
+			if operation.RequestBody.Ref != nil && isExternalRef(*operation.RequestBody.Ref) {
+				return true
+			}
+			if operation.RequestBody.Content != nil {
+				for _, content := range operation.RequestBody.Content {
+					if content != nil && content.Schema != nil && hasExternalRefsInSchema(content.Schema) {
+						return true
+					}
+				}
+			}
+		}
+
+		// Check responses
+		if operation.Responses != nil {
+			for _, response := range operation.Responses {
+				if response.Ref != nil && isExternalRef(*response.Ref) {
+					return true
+				}
+				if response.Content != nil {
+					for _, content := range response.Content {
+						if content != nil && content.Schema != nil && hasExternalRefsInSchema(content.Schema) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return false
 }

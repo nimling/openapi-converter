@@ -53,3 +53,17 @@ func (r ReferenceRegister) SetComponent(compType string, filePath string) {
 	name := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	r[filePath] = "#/components/" + compType + "/" + name
 }
+
+func (r ReferenceRegister) GetComponent(compType string, compName string) *Component {
+	for k, v := range r {
+		if strings.TrimPrefix(v, "#/components/"+compType+"/") == compName {
+			return &Component{
+				FilePath:   k,
+				Name:       compName,
+				Identifier: v,
+				Type:       compType,
+			}
+		}
+	}
+	return nil
+}
