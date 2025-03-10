@@ -40,11 +40,12 @@ openapi-converter [flags] <input-files...>
 
 # Flags:
 -o, --output string          Output directory for nginx configuration files
--d, --docs string           Output directory for API docs
--i, --index string          Path to index.md to write VitePress features
-    --file-prefix string    Prefix for generated filenames
-    --common-prefix string  Path prefix for VitePress links
-    --write-introduction    Generate API docs introduction file
+-d, --docs string            Output directory for API docs
+-i, --index string           Path to index.md to write VitePress features
+    --file-prefix string     Prefix for generated filenames
+    --common-prefix string   Path prefix for VitePress links
+    --write-introduction     Generate API docs introduction file
+    --merge-responses-inline Merges inline allOf definitions into a single inline object
 
 # Examples:
 # Convert single file to nginx config

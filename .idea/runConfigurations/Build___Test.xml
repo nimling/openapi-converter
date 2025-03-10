@@ -2,7 +2,7 @@
   <configuration default="false" name="Build &amp; Test" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="openapi-converter" />
     <working_directory value="$PROJECT_DIR$" />
-    <parameters value="$PROJECT_DIR$/../bookable_server/openapi_definition/index.yml --common-prefix bookable -d $PROJECT_DIR$/../docs/docs/api -i $PROJECT_DIR$/../docs/docs/api/index.md --write-introduction" />
+    <parameters value="$PROJECT_DIR$/../bookable_server/openapi_definition/index.yml --common-prefix bookable -d $PROJECT_DIR$/../docs/docs/api -i $PROJECT_DIR$/../docs/docs/api/index.md --write-introduction --merge-responses-inline" />
     <kind value="PACKAGE" />
     <package value="github.com/nimling/openapi-converter" />
     <directory value="$PROJECT_DIR$" />

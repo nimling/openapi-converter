@@ -10,12 +10,13 @@ import (
 )
 
 var (
-	cmdOutputDir         string
-	cmdDocsDir           string
-	cmdIndexPath         string
-	cmdFilePrefix        string
-	cmdCommonPrefix      string
-	cmdWriteIntroduction bool
+	cmdOutputDir            string
+	cmdDocsDir              string
+	cmdIndexPath            string
+	cmdFilePrefix           string
+	cmdCommonPrefix         string
+	cmdWriteIntroduction    bool
+	cmdMergeResponsesInline bool
 )
 
 func main() {
@@ -32,6 +33,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&cmdFilePrefix, "file-prefix", "", "", "The output filename prefix to use")
 	rootCmd.Flags().StringVarP(&cmdCommonPrefix, "common-prefix", "", "", "The output path prefix to use for the Vitepress links")
 	rootCmd.Flags().BoolVarP(&cmdWriteIntroduction, "write-introduction", "", false, "Writes API docs introduction file")
+	rootCmd.Flags().BoolVarP(&cmdMergeResponsesInline, "merge-responses-inline", "", false, "Merges inline allOf definitions into a single inline object")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -113,6 +115,14 @@ func processFile(filePath string) error {
 
 	if err = conv.ValidateDocument(); err != nil {
 		return fmt.Errorf("error: %s", err)
+	}
+
+	if cmdMergeResponsesInline {
+		err = conv.MergeResponsesInline()
+		if err != nil {
+			return fmt.Errorf("error: %s", err)
+		}
+		fmt.Printf("Successfully merged responses inline for spec %s\n", filePath)
 	}
 
 	if cmdOutputDir != "" {
