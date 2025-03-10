@@ -1,7 +1,6 @@
 package converter
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -59,10 +58,6 @@ func (c *Components) PutRegister(compType string, filePath string) *Component {
 		}
 	} else {
 		c.Register[filePath] = identifier
-	}
-
-	if strings.Contains(identifier, "BookableAvailability") {
-		fmt.Println("Got here okey??")
 	}
 
 	return &Component{
