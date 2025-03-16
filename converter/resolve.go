@@ -2,6 +2,7 @@ package converter
 
 import (
 	"fmt"
+	"github.com/nimling/openapi-converter/utils"
 	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
@@ -61,29 +62,14 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 
 	// Process path parameters if any
 	if pathItem.Parameters != nil {
-		for i, param := range pathItem.Parameters {
-			if param == nil {
-				continue
-			}
-
-			if param.Ref != nil && isExternalRef(*param.Ref) {
-				filePath := resolveRefPath(n.filePath, *param.Ref)
-				resolved, err := loadExternalRef[Parameter](filePath)
-				if err != nil {
-					return fmt.Errorf("failed to load external parameter ref: %w", err)
-				}
-				pathItem.Parameters[i] = resolved
-			}
-
-			// Process parameter schema
-			if param.Schema != nil {
-				if err := param.Schema.resolveExternalRefs(n.doc.Components, n.filePath); err != nil {
-					return fmt.Errorf("failed to resolve parameter schema: %w", err)
-				}
-			}
+		var err error
+		pathItem.Parameters, err = n.resolveParameterRefs(pathItem.Parameters, n.filePath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve path parameters: %w", err)
 		}
 	}
 
+	// Process operations
 	for method, op := range pathItem.Operations() {
 		if op == nil {
 			continue
@@ -103,36 +89,17 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 
 		// Process operation parameters
 		if op.Parameters != nil {
-			for i, param := range op.Parameters {
-				if param == nil {
-					continue
-				}
-
-				internalRelPath := relPath
-				if param.Ref != nil && isExternalRef(*param.Ref) {
-					internalRelPath = resolveRefPath(relPath, *param.Ref)
-					resolved, err := loadExternalRef[Parameter](internalRelPath)
-					if err != nil {
-						return fmt.Errorf("failed to load external parameter ref: %w", err)
-					}
-					op.Parameters[i] = resolved
-					param = resolved
-				}
-
-				// Process parameter schema
-				if param.Schema != nil {
-					if err := param.Schema.resolveExternalRefs(n.doc.Components, internalRelPath); err != nil {
-						return fmt.Errorf("failed to resolve parameter schema: %w", err)
-					}
-				}
+			var err error
+			op.Parameters, err = n.resolveParameterRefs(op.Parameters, relPath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve operation parameters: %w", err)
 			}
 		}
 
 		// Process request body
 		if op.RequestBody != nil {
-			requestRelPath := relPath
 			if op.RequestBody.Ref != nil && isExternalRef(*op.RequestBody.Ref) {
-				requestRelPath = resolveRefPath(relPath, *op.RequestBody.Ref)
+				requestRelPath := resolveRefPath(relPath, *op.RequestBody.Ref)
 				resolved, err := loadExternalRef[RequestBody](requestRelPath)
 				if err != nil {
 					return fmt.Errorf("failed to load external request body ref: %w", err)
@@ -147,29 +114,27 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 						continue
 					}
 
-					if err := content.Schema.resolveExternalRefs(n.doc.Components, requestRelPath); err != nil {
+					if err := content.Schema.resolveExternalRefs(n.doc.Components, relPath); err != nil {
 						return fmt.Errorf("failed to resolve request body schema for %s: %w", mediaType, err)
 					}
 				}
 			}
 		}
 
-		// Process responses and their schemas
+		// Process responses
 		if op.Responses != nil {
 			for code, response := range op.Responses {
 				if response == nil {
 					continue
 				}
 
-				responseRelPath := relPath
 				if response.Ref != nil && isExternalRef(*response.Ref) {
-					responseRelPath = resolveRefPath(relPath, *response.Ref)
+					responseRelPath := resolveRefPath(relPath, *response.Ref)
 					resolved, err := loadExternalRef[Response](responseRelPath)
 					if err != nil {
 						return fmt.Errorf("failed to load external response ref: %w", err)
 					}
 					op.Responses[code] = resolved
-					response = resolved
 				}
 
 				// Process response content schemas
@@ -179,7 +144,7 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 							continue
 						}
 
-						if err := content.Schema.resolveExternalRefs(n.doc.Components, responseRelPath); err != nil {
+						if err := content.Schema.resolveExternalRefs(n.doc.Components, relPath); err != nil {
 							return fmt.Errorf("failed to resolve response schema for %s: %w", mediaType, err)
 						}
 					}
@@ -193,6 +158,7 @@ func (n *OpenAPIConverter) resolvePathItemRefs(pathItem *PathItem) error {
 
 	return nil
 }
+
 func (r *Schema) resolveExternalRefs(components *Components, relPath string) error {
 	// Handle direct reference
 	if r.Ref != nil && isExternalRef(*r.Ref) {
@@ -260,6 +226,157 @@ func (r *Schema) resolveExternalRefs(components *Components, relPath string) err
 	}
 
 	return nil
+}
+
+func (n *OpenAPIConverter) resolveParameterRefs(params []*Parameter, relPath string) ([]*Parameter, error) {
+	if params == nil {
+		return nil, nil
+	}
+
+	var result []*Parameter
+
+	for _, param := range params {
+		if param == nil {
+			continue
+		}
+
+		// Handle external reference
+		if param.Ref != nil && isExternalRef(*param.Ref) {
+			refFilePath := resolveRefPath(relPath, *param.Ref)
+
+			// Load the referenced parameter file
+			resolved, err := loadExternalRef[Parameter](refFilePath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load external parameter ref %s: %w", *param.Ref, err)
+			}
+
+			// If the loaded parameter has a schema with explode and has properties
+			if resolved.Schema != nil && resolved.Schema.Properties != nil {
+				// Check for explode possibility
+				exploded := false
+				if resolved.Schema.Type != nil && *resolved.Schema.Type == "object" {
+					exploded = true
+				}
+
+				if exploded {
+					// Determine base name for component (use filename without extension)
+					baseName := filepath.Base(strings.TrimSuffix(refFilePath, filepath.Ext(refFilePath)))
+
+					// Create individual parameters for each property
+					for propName, propSchema := range resolved.Schema.Properties {
+						explodedParam := &Parameter{
+							Name:     propName,
+							In:       resolved.In,
+							Required: false,
+							Schema:   propSchema,
+						}
+
+						if propSchema.Description != nil {
+							explodedParam.Description = *propSchema.Description
+						}
+
+						if propSchema.Example != nil {
+							explodedParam.Example = propSchema.Example
+						}
+
+						// Check if this property is in the original schema's required list
+						if resolved.Schema.Required != nil {
+							for _, requiredProp := range resolved.Schema.Required {
+								if *requiredProp == propName {
+									explodedParam.Required = true
+									break
+								}
+							}
+						}
+
+						// Generate a unique component name using camel case
+						componentName := generateComponentName(baseName, propName)
+
+						// Ensure components is initialized
+						if n.doc.Components == nil {
+							n.doc.Components = &Components{
+								Parameters: make(map[string]*Parameter),
+								Register:   ReferenceRegister{},
+							}
+						}
+
+						// Register the exploded parameter
+						n.doc.Components.Parameters[componentName] = explodedParam
+						n.doc.Components.PutRegister("parameters", refFilePath+"#"+componentName)
+
+						// Add a reference to the new component parameter
+						result = append(result, &Parameter{
+							Ref: utils.StringPtr(fmt.Sprintf("#/components/parameters/%s", componentName)),
+						})
+					}
+				} else {
+					// Not explodable, just register as a normal component
+					componentName := filepath.Base(strings.TrimSuffix(refFilePath, filepath.Ext(refFilePath)))
+
+					if n.doc.Components == nil {
+						n.doc.Components = &Components{
+							Parameters: make(map[string]*Parameter),
+							Register:   ReferenceRegister{},
+						}
+					}
+
+					n.doc.Components.Parameters[componentName] = resolved
+					n.doc.Components.PutRegister("parameters", refFilePath)
+
+					// Add reference to the parameter
+					result = append(result, &Parameter{
+						Ref: utils.StringPtr(fmt.Sprintf("#/components/parameters/%s", componentName)),
+					})
+				}
+			} else {
+				// No properties to explode, treat as normal parameter
+				componentName := filepath.Base(strings.TrimSuffix(refFilePath, filepath.Ext(refFilePath)))
+
+				if n.doc.Components == nil {
+					n.doc.Components = &Components{
+						Parameters: make(map[string]*Parameter),
+						Register:   ReferenceRegister{},
+					}
+				}
+
+				n.doc.Components.Parameters[componentName] = resolved
+				n.doc.Components.PutRegister("parameters", refFilePath)
+
+				// Add reference to the parameter
+				result = append(result, &Parameter{
+					Ref: utils.StringPtr(fmt.Sprintf("#/components/parameters/%s", componentName)),
+				})
+			}
+		} else {
+			// Not an external reference, keep as is
+			result = append(result, param)
+		}
+	}
+
+	return result, nil
+}
+
+func generateComponentName(baseName string, propName string) string {
+	// Split the base name by delimiters
+	parts := strings.FieldsFunc(baseName, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' '
+	})
+
+	// Capitalize each part
+	for i, part := range parts {
+		parts[i] = strings.Title(strings.ToLower(part))
+	}
+
+	// Capitalize the first letter of the property name
+	propParts := strings.FieldsFunc(propName, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' '
+	})
+	for i, part := range propParts {
+		propParts[i] = strings.Title(strings.ToLower(part))
+	}
+
+	// Combine base name parts and property name parts
+	return strings.Join(parts, "") + strings.Join(propParts, "")
 }
 
 func (n *OpenAPIConverter) resolveComponentRefs(components *Components) error {

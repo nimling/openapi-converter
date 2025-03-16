@@ -70,13 +70,13 @@ type SecurityScheme struct {
 }
 
 type Parameter struct {
-	Ref         *string `yaml:"$ref,omitempty"`
-	Name        string  `yaml:"name,omitempty"`
-	In          string  `yaml:"in,omitempty"`
-	Required    bool    `yaml:"required,omitempty"`
-	Schema      *Schema `yaml:"schema,omitempty"`
-	Description string  `yaml:"description,omitempty"`
-	Example     string  `yaml:"example,omitempty"`
+	Ref         *string     `yaml:"$ref,omitempty"`
+	Name        string      `yaml:"name,omitempty"`
+	In          string      `yaml:"in,omitempty"`
+	Required    bool        `yaml:"required,omitempty"`
+	Schema      *Schema     `yaml:"schema,omitempty"`
+	Description string      `yaml:"description,omitempty"`
+	Example     interface{} `yaml:"example,omitempty"`
 }
 
 type PathItem struct {
