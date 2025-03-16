@@ -244,6 +244,17 @@ func (n *OpenAPIConverter) resolveParameterRefs(params []*Parameter, relPath str
 		if param.Ref != nil && isExternalRef(*param.Ref) {
 			refFilePath := resolveRefPath(relPath, *param.Ref)
 
+			// Check if this reference is already registered
+			if n.doc.Components != nil && n.doc.Components.Register != nil {
+				if existingRef, exists := n.doc.Components.Register[refFilePath]; exists {
+					// Add reference to the existing component
+					result = append(result, &Parameter{
+						Ref: utils.StringPtr(existingRef),
+					})
+					continue
+				}
+			}
+
 			// Load the referenced parameter file
 			resolved, err := loadExternalRef[Parameter](refFilePath)
 			if err != nil {
@@ -269,14 +280,13 @@ func (n *OpenAPIConverter) resolveParameterRefs(params []*Parameter, relPath str
 							In:       resolved.In,
 							Required: false,
 							Schema:   propSchema,
+							Example:  propSchema.Example,
 						}
 
 						if propSchema.Description != nil {
 							explodedParam.Description = *propSchema.Description
-						}
-
-						if propSchema.Example != nil {
-							explodedParam.Example = propSchema.Example
+						} else {
+							explodedParam.Description = "Resolved from " + propName
 						}
 
 						// Check if this property is in the original schema's required list
