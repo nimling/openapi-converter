@@ -175,13 +175,11 @@ func getIconForTitle(title string) string {
 }
 
 func (n *OpenAPIConverter) WriteVitePressFeatures(outputPath string) error {
-	// Read the existing file content
 	content, err := os.ReadFile(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read index.md: %w", err)
 	}
 
-	// Split the content by "---" to extract the frontmatter
 	parts := strings.Split(string(content), "---")
 	if len(parts) < 3 {
 		return fmt.Errorf("invalid frontmatter format in index.md")
@@ -205,12 +203,22 @@ func (n *OpenAPIConverter) WriteVitePressFeatures(outputPath string) error {
 	}
 
 	if frontmatter.Features == nil {
-		frontmatter.Features = append(frontmatter.Features, feature)
-	} else {
 		frontmatter.Features = []vitepress.Feature{feature}
+	} else {
+		found := false
+		for i, existingFeature := range frontmatter.Features {
+			if existingFeature.Link != nil && *existingFeature.Link == featureLink {
+				frontmatter.Features[i] = feature
+				found = true
+				break
+			}
+		}
+		
+		if !found {
+			frontmatter.Features = append(frontmatter.Features, feature)
+		}
 	}
 
-	// Marshal the ordered frontmatter to YAML
 	updatedFrontmatter, err := yaml.Marshal(frontmatter)
 	if err != nil {
 		return fmt.Errorf("failed to marshal updated frontmatter: %w", err)
