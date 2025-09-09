@@ -11,40 +11,44 @@ on:
         type: string
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run tests in Docker
+        run: docker build -f Dockerfile.test .
+  
   build:
-    runs-on: ${{ matrix.os }}
+    needs: test
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [linux, darwin, windows]
         arch: [amd64, arm64]
         exclude:
-          - os: windows-latest
+          - os: windows
             arch: arm64
     steps:
       - uses: actions/checkout@v4
       
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-      
-      - name: Build CLI
+      - name: Build with Docker
         run: |
-          GOOS=$(echo ${{ matrix.os }} | cut -d- -f1 | sed 's/ubuntu/linux/')
-          GOARCH=${{ matrix.arch }}
+          docker build \
+            --build-arg GOOS=${{ matrix.os }} \
+            --build-arg GOARCH=${{ matrix.arch }} \
+            -t openapi-converter-builder:${{ matrix.os }}-${{ matrix.arch }} .
+      
+      - name: Extract binary from Docker
+        run: |
           EXT=""
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            GOOS=windows
+          if [[ "${{ matrix.os }}" == "windows" ]]; then
             EXT=.exe
           fi
-          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            GOOS=darwin
-          fi
-          GOOS=${GOOS} GOARCH=${GOARCH} go build -o dist/openapi-converter-${GOOS}-${GOARCH}${EXT} ./cmd
-        shell: bash
-      
-      - name: Run tests
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'amd64'
-        run: make test
+          docker create --name temp-container openapi-converter-builder:${{ matrix.os }}-${{ matrix.arch }}
+          mkdir -p dist
+          docker cp temp-container:/root/openapi-converter${EXT} ./dist/openapi-converter-${{ matrix.os }}-${{ matrix.arch }}${EXT}
+          docker rm temp-container
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -59,16 +63,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Extract Version
+      - name: Get version
         id: version
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION="${GITHUB_REF#refs/tags/}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "major_version=${VERSION%%.*}" >> $GITHUB_OUTPUT
       
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -87,16 +90,6 @@ jobs:
             rm -rf "$dir"
           done
           ls -la
-      
-      - name: Update Major Version Tag
-        run: |
-          git config user.name "${GIT_USER_NAME:-GitHub Actions}"
-          git config user.email "${GIT_USER_EMAIL:-actions@github.com}"
-          
-          MAJOR_VERSION="${{ steps.version.outputs.major_version }}"
-          
-          git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION tag to ${{ steps.version.outputs.version }}"
-          git push origin "$MAJOR_VERSION" --force
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -119,7 +112,7 @@ jobs:
             
             #### GitHub Action
             ```yaml
-            - uses: nimling/openapi-converter@${{ steps.version.outputs.major_version }}
+            - uses: nimling/openapi-converter@${{ steps.version.outputs.version }}
               with:
                 openapi-file: spec.yml
                 docs-dir: output
@@ -128,6 +121,6 @@ jobs:
             ```
             
             ### Full Changelog
-            https://github.com/${{ github.repository }}/compare/${{ steps.version.outputs.major_version }}...${{ steps.version.outputs.version }}
+            https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.version }}
           draft: false
           prerelease: false

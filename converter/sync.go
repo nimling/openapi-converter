@@ -85,8 +85,12 @@ func (s *DocSyncer) Execute() error {
 				return fmt.Errorf("failed to copy directory %s to %s: %w", source, targetDir, err)
 			}
 		} else {
-			if err := s.copyFile(source, dest); err != nil {
-				return fmt.Errorf("failed to copy %s to %s: %w", source, dest, err)
+			actualDest := dest
+			if strings.HasSuffix(dest, "/") {
+				actualDest = filepath.Join(dest, filepath.Base(source))
+			}
+			if err := s.copyFile(source, actualDest); err != nil {
+				return fmt.Errorf("failed to copy %s to %s: %w", source, actualDest, err)
 			}
 		}
 		

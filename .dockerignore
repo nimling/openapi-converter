@@ -1,0 +1,9 @@
+.git
+.github
+dist
+bin
+*.md
+.gitignore
+Dockerfile*
+.dockerignore
+test/examples/output
