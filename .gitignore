@@ -1,2 +1,6 @@
 dist
-test
+.claude
+.env
+CLAUDE.md
+!.env.example
+test/examples/output/

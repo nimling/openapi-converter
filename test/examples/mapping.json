@@ -1,0 +1,16 @@
+{
+  "output/guides/myproject/": [
+    ".*docs/guide\\.md$",
+    ".*docs/guide/index\\.md$",
+    ".*guide/index\\.md$"
+  ],
+  "output/api/myproject/": [
+    ".*docs/api\\.md$",
+    ".*docs/api/index\\.md$",
+    ".*api/index\\.md$"
+  ],
+  "output/tutorials/getting-started.md": [
+    ".*tutorials/getting-started\\.md$",
+    ".*docs/getting-started\\.md$"
+  ]
+}

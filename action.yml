@@ -1,0 +1,94 @@
+name: 'OpenAPI Converter'
+description: 'Convert OpenAPI specifications and sync documentation files'
+author: 'nimtech'
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  command:
+    description: 'Command to run (convert or sync)'
+    required: true
+    default: 'convert'
+  
+  openapi-file:
+    description: 'Path to OpenAPI YAML file (for convert command)'
+    required: false
+  
+  docs-dir:
+    description: 'Output directory for API docs (for convert command)'
+    required: false
+  
+  output-dir:
+    description: 'Output directory for nginx configuration files (for convert command)'
+    required: false
+  
+  common-prefix:
+    description: 'Output path prefix for VitePress links (for convert command)'
+    required: false
+  
+  file-prefix:
+    description: 'Output filename prefix (for convert command)'
+    required: false
+  
+  index-path:
+    description: 'Output index.md path for VitePress features (for convert command)'
+    required: false
+  
+  merge-responses:
+    description: 'Merge inline allOf definitions (for convert command)'
+    required: false
+    default: 'false'
+  
+  write-introduction:
+    description: 'Write API docs introduction file (for convert command)'
+    required: false
+    default: 'false'
+  
+  sync-map:
+    description: 'JSON mapping file or inline JSON for sync command. Destinations must specify target filename. Copies files with rename or entire directories if target file exists within.'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+    
+    - name: Install OpenAPI Converter
+      shell: bash
+      run: |
+        go install github.com/nimling/openapi-converter@latest
+        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+    
+    - name: Run Convert Command
+      if: inputs.command == 'convert'
+      shell: bash
+      run: |
+        ARGS="convert ${{ inputs.openapi-file }}"
+        
+        [ -n "${{ inputs.common-prefix }}" ] && ARGS="$ARGS --common-prefix ${{ inputs.common-prefix }}"
+        [ -n "${{ inputs.docs-dir }}" ] && ARGS="$ARGS -d ${{ inputs.docs-dir }}"
+        [ -n "${{ inputs.output-dir }}" ] && ARGS="$ARGS -o ${{ inputs.output-dir }}"
+        [ -n "${{ inputs.file-prefix }}" ] && ARGS="$ARGS --file-prefix ${{ inputs.file-prefix }}"
+        [ -n "${{ inputs.index-path }}" ] && ARGS="$ARGS -i ${{ inputs.index-path }}"
+        [ "${{ inputs.merge-responses }}" == "true" ] && ARGS="$ARGS --merge-responses-inline"
+        [ "${{ inputs.write-introduction }}" == "true" ] && ARGS="$ARGS --write-introduction"
+        
+        openapi-converter $ARGS
+    
+    - name: Run Sync Command
+      if: inputs.command == 'sync'
+      shell: bash
+      run: |
+        SYNC_MAP="${{ inputs.sync-map }}"
+        if [[ "$SYNC_MAP" == \{* ]]; then
+          TEMP_FILE=$(mktemp /tmp/sync-map.XXXXXX.json)
+          echo "$SYNC_MAP" > "$TEMP_FILE"
+          openapi-converter sync -s "$TEMP_FILE"
+          rm -f "$TEMP_FILE"
+        else
+          openapi-converter sync -s "$SYNC_MAP"
+        fi
