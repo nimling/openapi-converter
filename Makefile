@@ -35,10 +35,39 @@ install: build
 	@echo "Installing $(APP_NAME) to /usr/local/bin..."
 	@cp $(GOBIN)/$(APP_NAME) /usr/local/bin/
 
-# Runs SBump, updates the patch version, commits, tags, and pushes
+# Deploy command - increment alpha version, commit and push
 deploy:
-	@echo "Bumping version and deploying"
-	@./sbump.sh patch --push-version
-	@echo -e "New version deploying /n"
+	@echo "Starting deployment process..."
+
+	# Read current version from .env
+	$(eval CURRENT_VERSION := $(shell grep "APP_VERSION=" .env | cut -d'=' -f2))
+	@echo "Current version: $(CURRENT_VERSION)"
+
+	# Extract the alpha number and increment it
+	$(eval ALPHA_NUM := $(shell echo $(CURRENT_VERSION) | grep -o 'alpha[0-9]*' | grep -o '[0-9]*'))
+	$(eval NEW_ALPHA_NUM := $(shell echo $$(($(ALPHA_NUM) + 1))))
+	$(eval NEW_VERSION := $(shell echo $(CURRENT_VERSION) | sed 's/alpha[0-9]*/alpha$(NEW_ALPHA_NUM)/'))
+	$(eval PACKAGE_VERSION := $(shell echo $(NEW_VERSION) | sed 's/^v//'))
+	@echo "New version: $(NEW_VERSION)"
+	@echo "Package version: $(PACKAGE_VERSION)"
+
+	# Update .env file with new version
+	@sed -i.bak 's/APP_VERSION=.*/APP_VERSION=$(NEW_VERSION)/' .env && rm .env.bak
+	@echo "Updated .env with new version (local only)"
+
+	# Add and commit all changes
+	@git add -A
+	@git commit -m "Release $(NEW_VERSION)" || echo "No changes to commit"
+
+	# Create and push git tag
+	@git tag $(NEW_VERSION)
+	@echo "Created git tag: $(NEW_VERSION)"
+
+	# Push commits and tag
+	@git push origin main
+	@git push origin $(NEW_VERSION)
+	@echo "Pushed commits and tag to origin"
+
+	@echo "Deployment complete! Version bumped to $(NEW_VERSION)"
 
 .PHONY: build run dev test install deploy all
