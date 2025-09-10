@@ -11,16 +11,27 @@ on:
         type: string
 
 jobs:
-  test:
+  version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Run tests in Docker
-        run: docker build -f Dockerfile.test .
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            echo "Error: No version provided via input or git tag"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Determined version: $VERSION"
   
   build:
-    needs: test
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -57,21 +68,11 @@ jobs:
           path: dist/openapi-converter-*
   
   publish:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Get version
-        id: version
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
       
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -94,11 +95,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.version.outputs.version }}
+          name: Release ${{ needs.version.outputs.version }}
           files: dist/openapi-converter-*
           body: |
-            ## OpenAPI Converter ${{ steps.version.outputs.version }}
+            ## OpenAPI Converter ${{ needs.version.outputs.version }}
             
             ### Installation
             
@@ -107,12 +108,12 @@ jobs:
             
             #### Go Install
             ```bash
-            go install github.com/nimling/openapi-converter@${{ steps.version.outputs.version }}
+            go install github.com/nimling/openapi-converter@${{ needs.version.outputs.version }}
             ```
             
             #### GitHub Action
             ```yaml
-            - uses: nimling/openapi-converter@${{ steps.version.outputs.version }}
+            - uses: nimling/openapi-converter@${{ needs.version.outputs.version }}
               with:
                 openapi-file: spec.yml
                 docs-dir: output
@@ -121,6 +122,6 @@ jobs:
             ```
             
             ### Full Changelog
-            https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.version }}
+            https://github.com/${{ github.repository }}/commits/${{ needs.version.outputs.version }}
           draft: false
           prerelease: false
